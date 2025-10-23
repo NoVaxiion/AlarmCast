@@ -1,0 +1,2 @@
+- expo + TypeScript skeleton for fire alarm app
+- Placeholders for notifications and transport (MQTT/WS)
