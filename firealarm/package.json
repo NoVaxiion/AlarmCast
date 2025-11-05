@@ -9,8 +9,9 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "expo": "~54.0.18",
+    "expo": "^54.0.21",
     "expo-notifications": "~0.32.12",
+    "expo-sqlite": "~16.0.8",
     "expo-status-bar": "~3.0.8",
     "mqtt": "^5.14.1",
     "react": "19.1.0",
