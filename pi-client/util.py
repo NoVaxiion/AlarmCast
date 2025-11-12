@@ -2,13 +2,6 @@ import numpy as np
 import socket
 import sounddevice as sd
 
-def get_host():
-    # Stub function to return localhost for testing purposes
-    return "127.0.0.1"
-def get_port():
-    # Stub function to return a test port number
-    return 65432
-
 class Client:
 
     # When creating a client, connect to the server
@@ -21,12 +14,13 @@ class Client:
 
     def talk_to_server(self):
         self.socket.send(self.client_id.encode())
-        self.send_audio()
+        # self.send_audio()
     
     def send_audio(self):
-        while True:
-            client_message = self.record_for_sending(.25, 16000, 1)
-            self.socket.send(client_message.encode())
+        #while True:
+        #    client_message = self.record_for_sending(.25, 16000, 1)
+        #    self.socket.send(client_message.encode())
+        pass
 
     def record_for_sending(duration, samplerate, channels):
         """
@@ -50,4 +44,13 @@ class Client:
         sd.wait()  # Wait until recording is finished
         print("Recording complete.")
         return audio_data
-    
+
+
+def get_host():
+    # Stub function to return localhost for testing purposes
+    return "127.0.0.1"
+def get_port():
+    # Stub function to return a test port number
+    return 65432
+
+
