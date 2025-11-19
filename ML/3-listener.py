@@ -76,3 +76,8 @@ with sd.InputStream(callback=audio_callback, channels=1, samplerate=SR, dtype='f
         input()
     except KeyboardInterrupt:
         pass
+
+    #errors to detect 
+    #outputs are actually listening: 5 seconds later
+    #output of also the result: if its correct or wrong
+    #
