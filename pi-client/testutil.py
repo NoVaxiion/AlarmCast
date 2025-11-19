@@ -20,6 +20,7 @@ def test_record_for_sending():
 
 
 def mel_spectrogram(audio: np.ndarray, sr = 16000, n_mels = 64, fmax = None, show = False) -> np.ndarray:
+    
     if not isinstance(audio, np.ndarray):
         raise TypeError("Audio must be a numpy.ndarray containing audio samples")
 
