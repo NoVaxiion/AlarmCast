@@ -1,8 +1,3 @@
-"""Minimal fire-alarm listener: short and easy to read.
-
-Behavior: 2s windows, 1s hop. Simple RMS gate, per-hop prediction and short hit-count debounce.
-"""
-
 from firealarm_net import FireAlarmCNN
 import sounddevice as sd
 import torch
@@ -10,74 +5,93 @@ import librosa
 import numpy as np
 import time
 
-# Config
-SR = 16000
-N_MELS = 64
-WIN = SR * 2
-HOP = SR * 1
-THRESH = 0.90
-REQUIRED_HITS = 3
-COOLDOWN = 5.0
-MIN_RMS = 0.015
+sample_rate= 16000
+mel_bands = 64
+window_size = sample_rate * 1 # Changed from 5s then to 2s to finally 1s
+hop = int(sample_rate * 0.5)  # Changed from 1s to 0.5s 
+confidence_threshold = 0.60   # Slightly lower the threshold
+required_hits = 2   
+reset_time = 3.0              # Reset faster
+min_rms = 0.01                # Sensitivity gate
 
-# Model
+# Load the Trained Model
 model = FireAlarmCNN(num_classes=3)
-state = torch.load('model/best_model.pt', map_location='cpu')
-model.load_state_dict(state)
+try:
+    state = torch.load('model/model.pt')
+    model.load_state_dict(state)
+    print("Model loaded successfully.")
+
+except Exception as e:
+    print(f"Error loading model: {e}")
+    exit()
+
 model.eval()
+classes = ['appliance', 'fire_alarm', 'siren']
 
-CLASSES = ['appliance', 'fire_alarm', 'siren']
-
-buf = []
+# State
+buffer = []
 hits = 0
 last_alert = 0.0
 
-
+# sounddevice library requires four of these parameters to function, two which are placeholders
 def audio_callback(indata, frames, time_info, status):
-    global buf, hits, last_alert
+    global buffer, hits, last_alert
+    
     if status:
+        print(f"Status: {status}")
         return
-    buf.extend(indata[:, 0].astype(np.float32))
-    if len(buf) < WIN:
-        return
-    seg = np.array(buf[:WIN], dtype=np.float32)
-    del buf[:HOP]
 
+    # Capture Audio
+    buffer.extend(indata[:, 0].astype(np.float32))
+    
+    # Wait until we have enough data for a 1s window_sizedow
+    if len(buffer) < window_size:
+        return
+
+    # Extract Segment
+    seg = np.array(buffer[:window_size], dtype=np.float32)
+    del buffer[:hop] # Remove the data (by sliding the window)
+
+    # Silence Gate
     rms = float(np.sqrt(np.mean(seg**2) + 1e-12))
-    if rms < MIN_RMS:
+    if rms < min_rms:
         hits = 0
         return
 
-    mel = librosa.feature.melspectrogram(y=seg, sr=SR, n_mels=N_MELS)
+    # Preprocess
+    mel = librosa.feature.melspectrogram(y=seg, sr=sample_rate, n_mels=mel_bands)
     mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+    
+    # Normalize 
     mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-8)
 
+    # Inference
     x = torch.from_numpy(mel_db)[None, None, :, :]
     with torch.inference_mode():
         probs = torch.softmax(model(x), dim=1).numpy()[0]
+    
     pred = int(np.argmax(probs))
     conf = float(probs[pred])
+    predicted_class = classes[pred]
 
-    if CLASSES[pred] == 'fire_alarm' and conf >= THRESH:
+    # Logic & Debouncing
+    print(f"Heard: {predicted_class} ({conf:.2f})") 
+
+    if predicted_class == 'fire_alarm' and conf >= confidence_threshold:
         hits += 1
     else:
         hits = 0
 
     now = time.monotonic()
-    if hits >= REQUIRED_HITS and (now - last_alert) >= COOLDOWN:
-        print(f'Fire Alarm Detected! conf={conf:.2f}')
+    if hits >= required_hits and (now - last_alert) >= reset_time:
+        print(f'\n Fire Alarm Detected! Conf: {conf:.2f}\n')
         last_alert = now
         hits = 0
 
-
-print('Listening (press Enter to stop)')
-with sd.InputStream(callback=audio_callback, channels=1, samplerate=SR, dtype='float32'):
+print(f'Listening... (window: {window_size/sample_rate}s)')
+with sd.InputStream(callback=audio_callback, channels=1, samplerate=sample_rate, dtype='float32'):
     try:
-        input()
+        while True:
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        pass
-
-    #errors to detect 
-    #outputs are actually listening: 5 seconds later
-    #output of also the result: if its correct or wrong
-    #
+        print("\nstopping...")
