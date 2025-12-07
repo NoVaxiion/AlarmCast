@@ -15,7 +15,7 @@ reset_time = 3.0              # Reset faster
 min_rms = 0.01                # Sensitivity gate
 
 # Load the Trained Model
-model = FireAlarmCNN(num_classes=3)
+model = FireAlarmCNN(num_classes=4)
 try:
     state = torch.load('model/model.pt')
     model.load_state_dict(state)
@@ -26,7 +26,7 @@ except Exception as e:
     exit()
 
 model.eval()
-classes = ['appliance', 'fire_alarm', 'siren']
+classes = ['appliance', 'carbon', 'siren', 'smoke']
 
 # State
 buffer = []
@@ -77,14 +77,14 @@ def audio_callback(indata, frames, time_info, status):
     # Logic & Debouncing
     print(f"Heard: {predicted_class} ({conf:.2f})") 
 
-    if predicted_class == 'fire_alarm' and conf >= confidence_threshold:
+    if predicted_class in ('smoke', 'carbon') and conf >= confidence_threshold:
         hits += 1
     else:
         hits = 0
 
     now = time.monotonic()
     if hits >= required_hits and (now - last_alert) >= reset_time:
-        print(f'\n Fire Alarm Detected! Conf: {conf:.2f}\n')
+        print(f'\n {predicted_class.capitalize()} Detected! Conf: {conf:.2f}\n')
         last_alert = now
         hits = 0
 
