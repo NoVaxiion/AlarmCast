@@ -1,5 +1,6 @@
 PRAGMA foreign_keys = ON;
 
+/* USERS --> is for APP USERS, all OWNERS need the app, not all MEMBERS need app*/
 CREATE TABLE IF NOT EXISTS users (
   user_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT UNIQUE,
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS hub (
     hub_name        TEXT NOT NULL
 );
 
+/* MEMBERS --> is for ALL PEOPLE, both OWNERS & MEMBERS*/
 CREATE TABLE IF NOT EXISTS member (
   member_id INTEGER PRIMARY KEY AUTOINCREMENT,
   hub_id    INTEGER NOT NULL,
