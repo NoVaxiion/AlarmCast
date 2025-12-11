@@ -8,7 +8,7 @@ import warnings
 #To mute Librosa warnings
 warnings.filterwarnings("ignore")
 
-#FILE_PATH = "Noises/fire_alarm/fire_018.wav"
+FILE_PATH = "Noises/fire_alarm/fire_018.wav"
 #FILE_PATH = "Noises/siren/siren_011.wav"
 #FILE_PATH = "Noises/appliance/appliance_001.wav"
 
