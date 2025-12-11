@@ -62,7 +62,14 @@ def audio_callback(indata, frames, time_info, status):
     mel = librosa.feature.melspectrogram(y=seg, sr=sample_rate, n_mels=mel_bands)
     mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
     
-    # Normalize 
+    # Match training preprocessing: crop/pad to (64, 64)
+    target_width = 64  
+    if mel_db.shape[1] > target_width:
+        mel_db = mel_db[:, :target_width]
+    elif mel_db.shape[1] < target_width:
+        mel_db = np.pad(mel_db, ((0, 0), (0, target_width - mel_db.shape[1])))
+    
+    # Normalize (per-sample like training does)
     mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-8)
 
     # Inference
@@ -77,12 +84,25 @@ def audio_callback(indata, frames, time_info, status):
     # Logic & Debouncing
     print(f"Heard: {predicted_class} ({conf:.2f})") 
 
-    if predicted_class in ('smoke', 'carbon') and conf >= confidence_threshold:
+    # CHANGE 1: Separate logic for Carbon vs Smoke
+    # Carbon alarms have short bursts, so we might only catch 1 good window.
+    if predicted_class == 'carbon' and conf >= confidence_threshold:
+        hits += 2  # Give double points to Carbon so 1 good hit triggers it
+    elif predicted_class == 'smoke' and conf >= confidence_threshold:
         hits += 1
     else:
-        hits = 0
-
+        # This allows the counter to survive brief blips/silence
+        if hits > 0:
+            hits -= 1 
+        else:
+            hits = 0
+    
+    hits = min(hits, 10)
+    
     now = time.monotonic()
+    # Ensure hits doesn't grow indefinitely if you use the += logic
+    hits = min(hits, 10) 
+    
     if hits >= required_hits and (now - last_alert) >= reset_time:
         print(f'\n {predicted_class.capitalize()} Detected! Conf: {conf:.2f}\n')
         last_alert = now

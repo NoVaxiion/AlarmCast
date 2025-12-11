@@ -7,10 +7,9 @@ from torch.utils.data import Dataset
 # CNN Model: improved with BatchNorm, Dropout and safer flattening
 # A Convolutional Neural Network (CNN) that takes in a Mel Spectrogram
 # (a 2D "image" of sound) and predicts which sound class it belongs to:
-# fire_alarm, appliance, or siren.
 
 class FireAlarmCNN(nn.Module):
-    def __init__(self, num_classes=3, dropout=0.3):
+    def __init__(self, num_classes=4, dropout=0.3):
         super().__init__()
 
         # Convolutional blocks with BatchNorm for training stability
