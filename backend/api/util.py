@@ -1,7 +1,15 @@
-import socket
-from threading import Thread
+import json
 import numpy as np
 import os
+import socket
+
+from pathlib import Path
+from scipy.io.wavfile import write
+from threading import Thread
+
+BASE_DIR = Path(__file__).resolve().parent
+recordings_dir = BASE_DIR / "audio-temp-storage"
+recordings_dir.mkdir(exist_ok=True)
 
 def get_host():
     # Bind to all interfaces to accept connections from network
@@ -32,7 +40,7 @@ class Server:
 
             # The first message will be the client id
             client_id = client_socket.recv(1024).decode()
-            client = {'client_id': client_id, 'socket': client_socket}
+            client = {'client_id': client_id, 'socket': client_socket, 'index': 0}
 
             print("Client ID: " + client_id)
 
@@ -41,11 +49,18 @@ class Server:
 
     def handle_client(self, client):
         client_socket = client['socket']
+        buffer = ''
         while True:
             try:
-                message = np.frombuffer(client_socket.recv(1024), dtype=np.float32)
-                if message.any():
-                    print(f"Message from {client['client_id']}: {message}") # For demonstration, just print the message
+                message = client_socket.recv(1024)
+                if message:
+                    buffer += message.decode()
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        message = json.loads(line)
+                        index = message['index']
+                        audio_data = np.array(message['audio_data'], dtype=np.float32)
+                        write(f"{recordings_dir}/{client['client_id']}_file_{index}.wav", 16000, audio_data)
                 else:
                     break
             except ConnectionResetError:
@@ -54,6 +69,4 @@ class Server:
         client['socket'].close()
         Server.Clients.remove(client)
 
-if __name__ == "__main__":
-    server = Server()
-    server.listen()
+

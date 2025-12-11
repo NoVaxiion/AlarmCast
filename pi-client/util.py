@@ -1,4 +1,4 @@
-import numpy as np
+import json
 import socket
 import sounddevice as sd
 
@@ -9,6 +9,10 @@ class Client:
         self.socket = socket.socket()
         self.socket.connect((get_host(), get_port()))
         self.client_id = client_id
+
+        print(sd.query_devices())
+        device_index = int(input("Input device index: "))
+        sd.default.device = device_index
         
         self.socket.send(self.client_id.encode())
         self.listen_for_trigger()
@@ -64,9 +68,12 @@ class Client:
             audio_data (numpy.ndarray): The audio data to package.
             index (int): The index of the audio chunk.
         """
-        header = f"INDEX:{index}\n".encode()
-        audio_bytes = audio_data.tobytes()
-        return header + audio_bytes
+        package_dict = {
+            'index': index,
+            'audio_data': audio_data.tolist()
+        }
+        package_json = json.dumps(package_dict) + "\n"
+        return package_json.encode()
 
 def get_host():
     # Stub function to return localhost for testing purposes
