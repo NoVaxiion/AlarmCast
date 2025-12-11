@@ -47,7 +47,7 @@ def predict(file_path):
 
     # Initialize State Variables inside the function
     hits = 0
-    last_alert = -10.0 # Start negative so it can trigger immediately
+    last_alert = 0 # Start negative so it can trigger immediately
 
     for i in range(0, len(y) - window_size, hop):
         
