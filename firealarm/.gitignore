@@ -4,3 +4,27 @@
 
 expo-env.d.ts
 # @end expo-cli
+
+*.pem
+keys/
+.env
+*.log
+
+
+# Node
+node_modules/
+.expo/
+npm-debug.log*
+
+# Python
+.venv/
+__pycache__/
+
+# Databases
+*.db
+
+# OS
+.DS_Store
+
+# Expo / ngrok
+**/ngrok

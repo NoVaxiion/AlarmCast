@@ -26,26 +26,34 @@ export default function Login() {
     }
 
     try {
-      const response = await fetch('http://<YOUR_SERVER_IP>:5000/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      const API_BASE = "http://18.117.246.113:8000";
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: email, password }),
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        Alert.alert('Success', 'Login successful!');
-        router.replace('/(tabs)');
+        Alert.alert("Success", "Login successful!");
+        router.replace("/(tabs)");
       } else {
-        Alert.alert('Error', data.message || 'Invalid credentials');
+        Alert.alert("Error", data.error || "Invalid credentials");
       }
-    } catch (error) {
-      Alert.alert('Offline Mode', 'Backend not available, login bypassed for testing.');
-      router.replace('/(tabs)');
+    } catch (err: any) {
+      Alert.alert("Network error", String(err?.message ?? err));
+      // do NOT route to tabs here while debugging
+    } finally {
+      setLoading(false);
     }
 
-    setLoading(false);
+    //} catch (error) {
+     // Alert.alert('Offline Mode', 'Backend not available, login bypassed for testing.');
+     // router.replace('/(tabs)');
+    //}
+
+    //setLoading(false);
   };
 
   return (
