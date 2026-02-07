@@ -26,12 +26,15 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const response = await fetch('http://<YOUR_SERVER_IP>:5000/register', {
+      const API_BASE = "http://18.117.246.113:8000";
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, role }),
+        body: JSON.stringify({
+          username: email,   // backend expects "username"
+          password: password
+        }),      
       });
-
       const data = await response.json();
 
       if (response.ok) {
@@ -39,13 +42,21 @@ export default function Register() {
           { text: 'OK', onPress: () => router.push('/login') },
         ]);
       } else {
-        Alert.alert('Error', data.message || 'Registration failed');
+        Alert.alert('Error', data.error || 'Registration failed');
       }
-    } catch (error) {
-      Alert.alert('Offline Mode', 'Simulated success — backend not connected yet.');
-      router.push('/(tabs)');
-    }
-    setLoading(false);
+    } catch (error: any) {
+        Alert.alert('Network error', String(error?.message ?? error));
+        // DO NOT route to tabs here while debugging
+      } finally {
+        setLoading(false);
+      }
+
+    //} catch (error) {
+     // Alert.alert('Offline Mode', 'Backend not available, login bypassed for testing.');
+     // router.replace('/(tabs)');
+    //}
+
+    //setLoading(false);
   };
 
   return (
