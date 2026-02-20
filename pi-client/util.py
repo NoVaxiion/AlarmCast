@@ -7,15 +7,29 @@ class Client:
     # When creating a client, connect to the server
     def __init__(self, client_id):
         self.socket = socket.socket()
-        self.socket.connect((get_host(), get_port()))
+        try:
+            self.socket.connect((get_host(), get_port()))
+        except Exception as e: 
+            raise Exception(e)
         self.client_id = client_id
-
-        print(sd.query_devices())
-        device_index = int(input("Input device index: "))
-        sd.default.device = device_index
         
         self.socket.send(self.client_id.encode())
-        self.listen_for_trigger()
+    
+    def configure(self):
+        answer = input("Reconfigure audio? (y/n): ")
+        while answer.lower() != "y" and answer.lower() != "n":
+            answer = input("Invalid input, try again: (y/n): ")
+        
+        if answer == "y":
+            self.configure_audio()
+        else:
+            print("New configuration not needed")
+
+    def configure_audio(self):
+        print(sd.query_devices())
+        print()
+        device_index = int(input("Input device index (> highlighted input device recommended): "))
+        sd.default.device = device_index
 
     def listen_for_trigger(self):
         """
@@ -39,7 +53,7 @@ class Client:
             self.socket.send(client_package)
             index += 1
 
-    def record_for_sending(self, duration, samplerate, channels):
+    def record_for_recognition(self, duration, samplerate, channels):
         """
         Records audio from the microphone for a specified duration.
         
@@ -60,20 +74,31 @@ class Client:
         sd.wait()  # Wait until recording is finished
         return audio_data
 
-    def package(self, audio_data, index):
+    def package(self, data):
         """
-        Packages the audio data with an index for sending.
+        Creates package for sending.
         
         Args:
-            audio_data (numpy.ndarray): The audio data to package.
-            index (int): The index of the audio chunk.
+            data (dict): data to be sent.
         """
         package_dict = {
-            'index': index,
-            'audio_data': audio_data.tolist()
+            'client_id': self.client_id,
+            'data': data
         }
-        package_json = json.dumps(package_dict) + "\n"
+        package_json = json.dumps(package_dict, default=str) + "\n"
         return package_json.encode()
+    
+    def send_package(self, package):
+        """
+        Sends package to server.
+        
+        Args:
+            package (bstream): byte stream package
+        """
+        self.socket.send(package)
+    
+    def get_configuration(self):
+        return {"socket": self.socket, "client_id": self.client_id}
 
 def get_host():
     # Stub function to return localhost for testing purposes
