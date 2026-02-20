@@ -27,7 +27,7 @@ def get_db():
 
 def init_db():
     """Initialize database with schema"""
-    schema_path = os.path.join(os.path.dirname(__file__), "..", "..", "firealarm", "src", "db", "schema.sql")
+    schema_path = os.path.join(os.path.dirname(__file__), "..", "db", "schema.sql")
     if os.path.exists(schema_path):
         with open(schema_path, 'r', encoding='utf-8') as f:
             schema = f.read()
