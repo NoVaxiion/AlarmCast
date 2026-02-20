@@ -141,11 +141,12 @@ class FireAlarmListener:
             self.hits = 0
 
     def on_alarm_detected(self, confidence, alarm_type="Alarm"):
-        print(f'\n🚨 {alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f}) 🚨\n')    
+        print(f'\n🚨 {alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})\n')
+        yield f'{alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})'    
 
     def start_listening(self):
         if self.running: return
-        print(f'🎧 Listening... (Ensemble Mode Active)')
+        print(f'🎧 Listening... (Ensembling Mode)')
         self.running = True
         self.stream = sd.InputStream(
             callback=self.audio_callback,
