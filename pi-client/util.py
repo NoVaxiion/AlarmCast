@@ -1,4 +1,4 @@
-import numpy as np
+import json
 import socket
 import sounddevice as sd
 
@@ -9,20 +9,37 @@ class Client:
         self.socket = socket.socket()
         self.socket.connect((get_host(), get_port()))
         self.client_id = client_id
-        
-        self.talk_to_server()
 
-    def talk_to_server(self):
+        print(sd.query_devices())
+        device_index = int(input("Input device index: "))
+        sd.default.device = device_index
+        
         self.socket.send(self.client_id.encode())
-        # self.send_audio()
+        self.listen_for_trigger()
+
+    def listen_for_trigger(self):
+        """
+        Listens for audio trigger to start audio sending.
+        """
+        while True:
+            if input().lower() == '':
+                self.send_audio()
     
     def send_audio(self):
-        #while True:
-        #    client_message = self.record_for_sending(.25, 16000, 1)
-        #    self.socket.send(client_message.encode())
-        pass
+        """
+        Records and sends audio data to the server in chunks.
 
-    def record_for_sending(duration, samplerate, channels):
+        Returns:
+            None
+        """
+        index = 0
+        while index < 6:
+            client_message = self.record_for_sending(10, 16000, 1)
+            client_package = self.package(client_message, index)
+            self.socket.send(client_package)
+            index += 1
+
+    def record_for_sending(self, duration, samplerate, channels):
         """
         Records audio from the microphone for a specified duration.
         
@@ -34,7 +51,6 @@ class Client:
         Returns:
             numpy.ndarray: Recorded audio data.
         """
-        print(f"Recording for {duration} seconds...")
         # Calculate the total number of frames to record
         frames = int(samplerate * duration)
 
@@ -42,9 +58,22 @@ class Client:
         audio_data = sd.rec(frames, samplerate=samplerate, channels=channels, dtype='float32')
 
         sd.wait()  # Wait until recording is finished
-        print("Recording complete.")
         return audio_data
 
+    def package(self, audio_data, index):
+        """
+        Packages the audio data with an index for sending.
+        
+        Args:
+            audio_data (numpy.ndarray): The audio data to package.
+            index (int): The index of the audio chunk.
+        """
+        package_dict = {
+            'index': index,
+            'audio_data': audio_data.tolist()
+        }
+        package_json = json.dumps(package_dict) + "\n"
+        return package_json.encode()
 
 def get_host():
     # Stub function to return localhost for testing purposes
@@ -52,5 +81,3 @@ def get_host():
 def get_port():
     # Stub function to return a test port number
     return 65432
-
-
