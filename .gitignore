@@ -1,6 +1,8 @@
-__pycache__
+__pycache__/
 
 .env
 .vscode/
 .DS_Store
-ML/features
+ml_small/features/
+ml_small/Noises/
+ml_small/active_learning_pool/
