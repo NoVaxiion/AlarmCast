@@ -87,7 +87,7 @@ class Client:
         }
         package_json = json.dumps(package_dict, default=str) + "\n"
         return package_json.encode()
-    
+
     def send_package(self, package):
         """
         Sends package to server.

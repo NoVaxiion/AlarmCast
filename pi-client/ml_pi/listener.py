@@ -119,7 +119,7 @@ class FireAlarmListener:
              print(f"High Frequency ({spectral_centroid:.0f}Hz) detected - Boosting CO confidence.")
 
         # --- SAFETY & LOGIC ---
-        print(f"\n📢 Prediction: {predicted_class.upper()} ({conf:.2f})")
+        print(f"\n  Prediction: {predicted_class.upper()} ({conf:.2f})")
         print(f"   [CNN Vote]: {dict(zip(self.classes, np.round(cnn_probs, 2)))}")
         print(f"   [RF  Vote]: {dict(zip(self.classes, np.round(rf_probs, 2)))}")
 
@@ -128,7 +128,7 @@ class FireAlarmListener:
         if is_danger and conf > 0.80:
             self.hits += 1
         elif is_danger and conf > 0.40:
-            print("⚠️ POTENTIAL DANGER - Low Confidence.")
+            print("  POTENTIAL DANGER - Low Confidence.")
             self.hits += 1 
         else:
             self.hits = 0
@@ -141,8 +141,8 @@ class FireAlarmListener:
             self.hits = 0
 
     def on_alarm_detected(self, confidence, alarm_type="Alarm"):
-        print(f'\n🚨 {alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})\n')
-        yield f'{alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})'    
+        print(f'\n  {alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})\n')
+        yield {'alarm_type': alarm_type, 'confidence': round(confidence, 2), 'status': 201} 
 
     def start_listening(self):
         if self.running: return
