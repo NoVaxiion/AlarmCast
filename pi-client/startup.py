@@ -107,6 +107,7 @@ def demo(client):
            client.send_package(client_package)
 
            # Call api, send notification that alarm sounded:
+           # Should send alarm_datetime, alarm_type, confidence, client_id: username or email etc, status_code
 
 if __name__ == "__main__":
     startup()
