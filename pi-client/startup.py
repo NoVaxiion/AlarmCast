@@ -1,5 +1,6 @@
 from datetime import datetime
 from util import Client
+import ml_pi
 import socket
 
 
@@ -95,16 +96,17 @@ def demo(client):
             data = {"alarm_datetime": current_time, "recognition_status": recognition_status}
             client_package = client.package(data)
             client.send_package(client_package)
-    #else:
-    #    listener
-    #    while alert := next(l, None):
-    #        current_time = datetime.now()
-    #        recognition_status = True
-    #
-    #        data = {"alarm_datetime": current_time, "recognition_status": recognition_status}
-    #        client_package = client.package(data)
-    #        client.send_package(client_package)
+    else:
+       l = ml_pi.listener.FireAlarmListener()
+       while alert := next(l, None):
+           current_time = datetime.now()
+           recognition_status = True
     
+           data = {"alarm_datetime": current_time, "recognition_status": recognition_status}
+           client_package = client.package(data)
+           client.send_package(client_package)
+
+           # Call api, send notification that alarm sounded:
 
 if __name__ == "__main__":
     startup()

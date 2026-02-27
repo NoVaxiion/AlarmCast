@@ -146,7 +146,7 @@ class FireAlarmListener:
 
     def start_listening(self):
         if self.running: return
-        print(f'🎧 Listening... (Ensembling Mode)')
+        print(f' Listening... (Ensembling Mode)')
         self.running = True
         self.stream = sd.InputStream(
             callback=self.audio_callback,
