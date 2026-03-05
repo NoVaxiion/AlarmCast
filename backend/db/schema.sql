@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS member (
   hub_id    INTEGER NOT NULL,
   name      TEXT,
   phone     TEXT,
+  carrier TEXT NOT NULL CHECK (carrier IN ('verizon','att','tmobile')),
   role      TEXT NOT NULL DEFAULT 'member'
             CHECK (role IN ('member', 'owner')),
   user_id   INTEGER,

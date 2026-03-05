@@ -4,12 +4,92 @@ from passlib.hash import argon2
 import sqlite3
 import os
 from contextlib import contextmanager
+import smtplib
+from email.message import EmailMessage
+import re
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Database path - adjust as needed
 DB_PATH = os.getenv("DATABASE_PATH", "alarmcast.db")
+
+# Email-to-SMS gateway domains (US carriers)
+CARRIER_GATEWAYS = {
+    "verizon": "vtext.com",
+    "att": "txt.att.net",
+    "tmobile": "tmomail.net"
+}
+
+# define the messages
+ALERT_MESSAGES = {
+    "SMOKE": "AlarmCast: FIRE/SMOKE alarm detected",
+    "CO": "AlarmCast: CO alarm detected",
+    "TEST": "AlarmCast: TEST alert",
+}
+
+def build_alert_message(event_type: str) -> str:
+    et = (event_type or "").upper()
+    return ALERT_MESSAGES.get(et, f"AlarmCast: Alert detected ({et})")
+
+# functions to normalize phone numbers & carrier type
+def normalize_phone_digits(phone: str) -> str:
+    """Convert '+1 (475) 224-7376' -> '4752247376' (US 10-digit)."""
+    digits = re.sub(r"\D", "", phone or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        raise ValueError("Phone must be a US 10-digit number (or +1 + 10 digits).")
+    return digits
+def normalize_carrier(carrier: str) -> str:
+    c = (carrier or "").lower().strip()
+    c = c.replace("-", "").replace(" ", "")
+    if c in ["tmobile", "tmo"]:
+        return "tmobile"
+    if c in ["att", "at&t", "atandt"]:
+        return "att"
+    if c in ["verizon", "vz"]:
+        return "verizon"
+    return c
+
+def send_sms_via_email(phone: str, carrier: str, message: str):
+    """Send an SMS via email gateway using Gmail SMTP (requires env vars)."""
+    email_user = os.getenv("ALERT_EMAIL_USER")
+    email_pass = os.getenv("ALERT_EMAIL_PASS")
+    if not email_user or not email_pass:
+        raise RuntimeError("Missing ALERT_EMAIL_USER or ALERT_EMAIL_PASS environment variables")
+
+    carrier_key = normalize_carrier(carrier)
+    if carrier_key not in CARRIER_GATEWAYS:
+        raise ValueError(f"Unknown carrier '{carrier}'. Supported: {list(CARRIER_GATEWAYS.keys())}")
+
+    phone_digits = normalize_phone_digits(phone)
+    to_addr = f"{phone_digits}@{CARRIER_GATEWAYS[carrier_key]}"
+
+    msg = EmailMessage()
+    msg["From"] = email_user
+    msg["To"] = to_addr
+    msg["Subject"] = ""  # keep blank for SMS gateways
+    msg.set_content((message or "")[:160])  # keep it short
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(email_user, email_pass)
+        smtp.send_message(msg)
+
+def notify_hub_members(hub_id: int, message: str):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT phone, carrier FROM member WHERE hub_id = ?", (hub_id,))
+        rows = cursor.fetchall()
+
+    results = []
+    for r in rows:
+        try:
+            send_sms_via_email(r["phone"], r["carrier"], message)
+            results.append({"phone": r["phone"], "ok": True})
+        except Exception as e:
+            results.append({"phone": r["phone"], "ok": False, "error": str(e)})
+    return results
 
 @contextmanager
 def get_db():
@@ -136,8 +216,13 @@ def get_hub(hub_id):
 def create_member(hub_id):
     """Add a member/contact to a hub"""
     data = request.get_json()
-    if not data or not data.get("name") or not data.get("phone"):
-        abort(400, description="name and phone are required")
+    if not data or not data.get("name") or not data.get("phone") or not data.get("carrier"):
+        abort(400, description="name, phone, and carrier are required")
+    
+    # check carrier --> must be in 3 options (ensured by dropdown, but in case it changes)
+    carrier_key = normalize_carrier(data["carrier"])
+    if carrier_key not in CARRIER_GATEWAYS:
+        abort(400, description="carrier must be verizon, att, or tmobile")
     
     with get_db() as conn:
         cursor = conn.cursor()
@@ -147,16 +232,18 @@ def create_member(hub_id):
             abort(404, description="Hub not found")
         
         cursor.execute(
-            """INSERT INTO member (hub_id, name, phone, role, user_id) 
-               VALUES (?, ?, ?, ?, ?)""",
-            (hub_id, data["name"], data["phone"], data.get("role", "member"), data.get("user_id"))
+            """INSERT INTO member (hub_id, name, phone, carrier, role, user_id) 
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (hub_id, data["name"], data["phone"], carrier_key, data.get("role", "member"), data.get("user_id"))
         )
+        
         member_id = cursor.lastrowid
         return jsonify({
             "member_id": member_id,
             "hub_id": hub_id,
             "name": data["name"],
             "phone": data["phone"],
+            "carrier": carrier_key,
             "role": data.get("role", "member"),
             "user_id": data.get("user_id")
         }), 201
@@ -167,7 +254,7 @@ def get_members(hub_id):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT member_id, hub_id, name, phone, role, user_id 
+            """SELECT member_id, hub_id, name, phone, carrier, role, user_id 
                FROM member WHERE hub_id = ?""",
             (hub_id,)
         )
@@ -176,6 +263,7 @@ def get_members(hub_id):
             "hub_id": row["hub_id"],
             "name": row["name"],
             "phone": row["phone"],
+            "carrier": row["carrier"],
             "role": row["role"],
             "user_id": row["user_id"]
         } for row in cursor.fetchall()]
@@ -280,30 +368,45 @@ def create_alert():
     if not data or not data.get("hub_id") or not data.get("device_event_id"):
         abort(400, description="hub_id and device_event_id are required")
     
+    hub_id = data["hub_id"]
+    device_event_id = data["device_event_id"]
+    status = data.get("status", "pending")
+
     with get_db() as conn:
         cursor = conn.cursor()
         # Verify hub and device_event exist
-        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = ?", (data["hub_id"],))
+        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = ?", (hub_id,))
         if not cursor.fetchone():
             abort(404, description="Hub not found")
         
-        cursor.execute("SELECT device_event_id FROM device_event WHERE device_event_id = ?", 
-                      (data["device_event_id"],))
-        if not cursor.fetchone():
+        cursor.execute(
+            "SELECT device_event_id, event_type FROM device_event WHERE device_event_id = ?",
+            (device_event_id,)
+        )
+        event_row = cursor.fetchone()
+        if not event_row:
             abort(404, description="Device event not found")
-        
-        status = data.get("status", "pending")
+
+        event_type = event_row["event_type"]
+
         cursor.execute(
             "INSERT INTO alert (hub_id, device_event_id, status) VALUES (?, ?, ?)",
-            (data["hub_id"], data["device_event_id"], status)
+            (hub_id, device_event_id, status)
         )
         alert_id = cursor.lastrowid
-        return jsonify({
-            "alert_id": alert_id,
-            "hub_id": data["hub_id"],
-            "device_event_id": data["device_event_id"],
-            "status": status
-        }), 201
+
+    # notify members
+    msg = build_alert_message(event_type)
+    notify_results = notify_hub_members(hub_id, msg)
+
+    return jsonify({
+        "alert_id": alert_id,
+        "hub_id": data["hub_id"],
+        "device_event_id": data["device_event_id"],
+        "status": status,
+        "event_type": event_type,
+        "notify_results": notify_results
+    }), 201
 
 @app.route("/api/hubs/<int:hub_id>/alerts", methods=["GET"])
 def get_alert_history(hub_id):
@@ -413,13 +516,15 @@ def test_alert(hub_id):
         )
         alert_id = cursor.lastrowid
         
-        # Optionally send notifications to members
-        # This would integrate with the notification service
-        
+        # Send notifications to members via Email-to-SMS
+        msg = build_alert_message("TEST")
+        results = notify_hub_members(hub_id, msg)
+
         return jsonify({
             "message": "Test alert created",
             "alert_id": alert_id,
-            "device_event_id": device_event_id
+            "device_event_id": device_event_id,
+            "notify_results": results
         }), 201
 
 # Error handlers
