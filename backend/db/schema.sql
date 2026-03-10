@@ -5,12 +5,14 @@ CREATE TABLE IF NOT EXISTS users (
   user_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT UNIQUE,
   password_hash TEXT,
-  password_algo TEXT
+  password_algo TEXT,
+  expo_push_token TEXT,
+  expo_push_token_updated_at DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS hub (
-    hub_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    hub_name        TEXT NOT NULL
+  hub_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  hub_name  TEXT NOT NULL
 );
 
 /* MEMBERS --> is for ALL PEOPLE, both OWNERS & MEMBERS*/
@@ -19,7 +21,7 @@ CREATE TABLE IF NOT EXISTS member (
   hub_id    INTEGER NOT NULL,
   name      TEXT,
   phone     TEXT,
-  carrier TEXT NOT NULL CHECK (carrier IN ('verizon','att','tmobile')),
+  carrier   TEXT NOT NULL CHECK (carrier IN ('verizon','att','tmobile')),
   role      TEXT NOT NULL DEFAULT 'member'
             CHECK (role IN ('member', 'owner')),
   user_id   INTEGER,
@@ -29,9 +31,9 @@ CREATE TABLE IF NOT EXISTS member (
 );
 
 CREATE TABLE IF NOT EXISTS device (
-  device_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-  hub_id     INTEGER NOT NULL,
-  is_active  INTEGER DEFAULT 1,
+  device_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  hub_id         INTEGER NOT NULL,
+  is_active      INTEGER DEFAULT 1,
   is_initialized INTEGER DEFAULT 0,
   FOREIGN KEY (hub_id) REFERENCES hub(hub_id) ON DELETE CASCADE
 );
@@ -40,16 +42,16 @@ CREATE TABLE IF NOT EXISTS device_event (
   device_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id       INTEGER NOT NULL,
   event_type      TEXT NOT NULL
-                  CHECK (event_type IN ('SMOKE', 'CO', 'TEST')),
+                  CHECK (event_type IN ('SMOKE', 'CO', 'TEST', 'FIRE', 'CARBON')),
   detected_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (device_id) REFERENCES device(device_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS alert (
-  alert_id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  hub_id         INTEGER NOT NULL,
+  alert_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  hub_id          INTEGER NOT NULL,
   device_event_id INTEGER NOT NULL,
-  status         TEXT DEFAULT 'pending',
+  status          TEXT DEFAULT 'pending',
   FOREIGN KEY (hub_id) REFERENCES hub(hub_id) ON DELETE CASCADE,
   FOREIGN KEY (device_event_id) REFERENCES device_event(device_event_id) ON DELETE CASCADE
 );
