@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 from passlib.hash import argon2
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import os
 from contextlib import contextmanager
 import smtplib
@@ -12,8 +13,6 @@ import requests
 
 app = Flask(__name__)
 CORS(app)
-
-DB_PATH = os.getenv("DATABASE_PATH", "alarmcast.db")
 
 CARRIER_GATEWAYS = {
     "verizon": "vtext.com",
@@ -104,8 +103,8 @@ def send_sms_via_email(phone: str, carrier: str, message: str):
 
 def notify_hub_members(hub_id: int, message: str):
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT phone, carrier FROM member WHERE hub_id = ?", (hub_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("SELECT phone, carrier FROM member WHERE hub_id = %s", (hub_id,))
         rows = cursor.fetchall()
 
     results = []
@@ -119,13 +118,13 @@ def notify_hub_members(hub_id: int, message: str):
 
 def notify_hub_users_push(hub_id: int, message: str):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
             """
             SELECT DISTINCT u.user_id, u.username, u.expo_push_token
             FROM users u
             JOIN member m ON m.user_id = u.user_id
-            WHERE m.hub_id = ?
+            WHERE m.hub_id = %s
               AND u.expo_push_token IS NOT NULL
               AND u.expo_push_token != ''
             """,
@@ -166,8 +165,13 @@ def notify_hub_users_push(hub_id: int, message: str):
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(
+        host=os.getenv("PGHOST", "alarmcast-db.c764sg8aae8y.us-east-2.rds.amazonaws.com"),
+        dbname=os.getenv("PGDATABASE", "postgres"),
+        user=os.getenv("PGUSER", "postgres"),
+        password=os.getenv("PGPASSWORD"),
+        port=os.getenv("PGPORT", "5432")
+    )
     try:
         yield conn
         conn.commit()
@@ -178,19 +182,19 @@ def get_db():
         conn.close()
 
 def init_db():
-    schema_path = os.path.join(os.path.dirname(__file__), "..", "db", "schema.sql")
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    schema_path = os.path.join(base_dir, "db", "schema.sql")
+
     if os.path.exists(schema_path):
         with open(schema_path, "r", encoding="utf-8") as f:
             schema = f.read()
+
         with get_db() as conn:
-            conn.executescript(schema)
+            cursor = conn.cursor()
+            cursor.execute(schema)
 
 with app.app_context():
     init_db()
-
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "healthy"})
 
 @app.route("/api/auth/register", methods=["POST"])
 def register_user():
@@ -201,20 +205,21 @@ def register_user():
     with get_db() as conn:
         password_hash = argon2.hash(data["password"])
 
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
             cursor.execute(
-                "INSERT INTO users (username, password_hash, password_algo) VALUES (?, ?, ?)",
+                "INSERT INTO users (username, password_hash, password_algo) VALUES (%s, %s, %s) RETURNING user_id",
                 (data["username"], password_hash, data.get("password_algo", "argon2"))
             )
-            user_id = cursor.lastrowid
+            user_id = cursor.fetchone()["user_id"]
             return jsonify({
                 "user_id": user_id,
                 "username": data["username"]
             }), 201
-        except sqlite3.IntegrityError:
+        except psycopg2.IntegrityError:
+            conn.rollback()
             abort(400, description="Username already exists")
-
+            
 @app.route("/api/auth/login", methods=["POST"])
 def login_user():
     data = request.get_json()
@@ -222,9 +227,9 @@ def login_user():
         abort(400, description="Username and password are required")
 
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "SELECT user_id, username, password_hash FROM users WHERE username = ?",
+            "SELECT user_id, username, password_hash FROM users WHERE username = %s",
             (data["username"],)
         )
         row = cursor.fetchone()
@@ -249,18 +254,17 @@ def upsert_push_token(user_id):
 
     with get_db() as conn:
         cursor = conn.cursor()
-
-        cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
         if not cursor.fetchone():
             abort(404, description="User not found")
 
         cursor.execute(
             """
             UPDATE users
-            SET expo_push_token = ?, expo_push_token_updated_at = ?
-            WHERE user_id = ?
+            SET expo_push_token = %s, expo_push_token_updated_at = %s
+            WHERE user_id = %s
             """,
-            (token, datetime.utcnow().isoformat(), user_id),
+            (token, datetime.utcnow(), user_id),
         )
 
     return jsonify({
@@ -275,12 +279,12 @@ def create_hub():
         abort(400, description="hub_name is required")
 
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "INSERT INTO hub (hub_name) VALUES (?)",
+            "INSERT INTO hub (hub_name) VALUES (%s) RETURNING hub_id",
             (data["hub_name"],)
         )
-        hub_id = cursor.lastrowid
+        hub_id = cursor.fetchone()["hub_id"]
         return jsonify({
             "hub_id": hub_id,
             "hub_name": data["hub_name"]
@@ -289,8 +293,8 @@ def create_hub():
 @app.route("/api/hubs/<int:hub_id>", methods=["GET"])
 def get_hub(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT hub_id, hub_name FROM hub WHERE hub_id = ?", (hub_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("SELECT hub_id, hub_name FROM hub WHERE hub_id = %s", (hub_id,))
         row = cursor.fetchone()
         if not row:
             abort(404, description="Hub not found")
@@ -310,18 +314,19 @@ def create_member(hub_id):
         abort(400, description="carrier must be verizon, att, or tmobile")
 
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = ?", (hub_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Verify hub exists
+        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = %s", (hub_id,))
         if not cursor.fetchone():
             abort(404, description="Hub not found")
 
         cursor.execute(
-            """INSERT INTO member (hub_id, name, phone, carrier, role, user_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO member (hub_id, name, phone, carrier, role, user_id) 
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING member_id""",
             (hub_id, data["name"], data["phone"], carrier_key, data.get("role", "member"), data.get("user_id"))
         )
-
-        member_id = cursor.lastrowid
+        member_id = cursor.fetchone()["member_id"]
         return jsonify({
             "member_id": member_id,
             "hub_id": hub_id,
@@ -335,10 +340,10 @@ def create_member(hub_id):
 @app.route("/api/hubs/<int:hub_id>/members", methods=["GET"])
 def get_members(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            """SELECT member_id, hub_id, name, phone, carrier, role, user_id
-               FROM member WHERE hub_id = ?""",
+            """SELECT member_id, hub_id, name, phone, carrier, role, user_id 
+               FROM member WHERE hub_id = %s""",
             (hub_id,)
         )
         members = [{
@@ -355,8 +360,8 @@ def get_members(hub_id):
 @app.route("/api/members/<int:member_id>", methods=["DELETE"])
 def delete_member(member_id):
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM member WHERE member_id = ?", (member_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute("DELETE FROM member WHERE member_id = %s", (member_id,))
         if cursor.rowcount == 0:
             abort(404, description="Member not found")
         return jsonify({"message": "Member deleted successfully"})
@@ -366,20 +371,22 @@ def create_device(hub_id):
     data = request.get_json() or {}
 
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = ?", (hub_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Verify hub exists
+        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = %s", (hub_id,))
         if not cursor.fetchone():
             abort(404, description="Hub not found")
-
-        is_active = data.get("is_active", 1)
-        is_initialized = data.get("is_initialized", 0)
-
+        
+        is_active = data.get("is_active", True)
+        is_initialized = data.get("is_initialized", False)
+        
         cursor.execute(
-            """INSERT INTO device (hub_id, is_active, is_initialized)
-               VALUES (?, ?, ?)""",
+            """INSERT INTO device (hub_id, is_active, is_initialized) 
+            VALUES (%s, %s, %s)
+            RETURNING device_id""",
             (hub_id, is_active, is_initialized)
         )
-        device_id = cursor.lastrowid
+        device_id = cursor.fetchone()["device_id"]
         return jsonify({
             "device_id": device_id,
             "hub_id": hub_id,
@@ -390,9 +397,9 @@ def create_device(hub_id):
 @app.route("/api/hubs/<int:hub_id>/devices", methods=["GET"])
 def get_devices(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "SELECT device_id, hub_id, is_active, is_initialized FROM device WHERE hub_id = ?",
+            "SELECT device_id, hub_id, is_active, is_initialized FROM device WHERE hub_id = %s",
             (hub_id,)
         )
         devices = [{
@@ -410,19 +417,20 @@ def create_device_event(device_id):
         abort(400, description="event_type is required")
 
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT device_id FROM device WHERE device_id = ?", (device_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Verify device exists
+        cursor.execute("SELECT device_id FROM device WHERE device_id = %s", (device_id,))
         if not cursor.fetchone():
             abort(404, description="Device not found")
 
         cursor.execute(
-            "INSERT INTO device_event (device_id, event_type) VALUES (?, ?)",
+            "INSERT INTO device_event (device_id, event_type) VALUES (%s, %s) RETURNING device_event_id",
             (device_id, data["event_type"])
         )
-        event_id = cursor.lastrowid
+        device_event_id = cursor.fetchone()["device_event_id"]
         cursor.execute(
-            "SELECT device_event_id, device_id, event_type, detected_at FROM device_event WHERE device_event_id = ?",
-            (event_id,)
+            "SELECT device_event_id, device_id, event_type, detected_at FROM device_event WHERE device_event_id = %s",
+            (device_event_id,)
         )
         row = cursor.fetchone()
         return jsonify({
@@ -443,13 +451,14 @@ def create_alert():
     status = data.get("status", "pending")
 
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = ?", (hub_id,))
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Verify hub and device_event exist
+        cursor.execute("SELECT hub_id FROM hub WHERE hub_id = %s", (hub_id,))
         if not cursor.fetchone():
             abort(404, description="Hub not found")
 
         cursor.execute(
-            "SELECT device_event_id, event_type FROM device_event WHERE device_event_id = ?",
+            "SELECT device_event_id, event_type FROM device_event WHERE device_event_id = %s",
             (device_event_id,)
         )
         event_row = cursor.fetchone()
@@ -459,10 +468,10 @@ def create_alert():
         event_type = event_row["event_type"]
 
         cursor.execute(
-            "INSERT INTO alert (hub_id, device_event_id, status) VALUES (?, ?, ?)",
+            "INSERT INTO alert (hub_id, device_event_id, status) VALUES (%s, %s, %s) RETURNING alert_id",
             (hub_id, device_event_id, status)
         )
-        alert_id = cursor.lastrowid
+        alert_id = cursor.fetchone()["alert_id"]
 
     msg = build_alert_message(event_type)
     sms_notify_results = notify_hub_members(hub_id, msg)
@@ -484,7 +493,7 @@ def get_alert_history(hub_id):
     offset = request.args.get("offset", 0, type=int)
 
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
             """SELECT
                 a.alert_id,
@@ -496,9 +505,9 @@ def get_alert_history(hub_id):
                 de.detected_at
             FROM alert a
             JOIN device_event de ON a.device_event_id = de.device_event_id
-            WHERE a.hub_id = ?
+            WHERE a.hub_id = %s
             ORDER BY de.detected_at DESC
-            LIMIT ? OFFSET ?""",
+            LIMIT %s OFFSET %s""",
             (hub_id, limit, offset)
         )
         alerts = [{
@@ -514,9 +523,10 @@ def get_alert_history(hub_id):
 @app.route("/api/hubs/<int:hub_id>/monitoring/status", methods=["GET"])
 def get_monitoring_status(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Check if any devices are active
         cursor.execute(
-            "SELECT COUNT(*) as count FROM device WHERE hub_id = ? AND is_active = 1",
+            "SELECT COUNT(*) as count FROM device WHERE hub_id = %s AND is_active = TRUE",
             (hub_id,)
         )
         active_devices = cursor.fetchone()["count"]
@@ -530,9 +540,9 @@ def get_monitoring_status(hub_id):
 @app.route("/api/hubs/<int:hub_id>/monitoring/start", methods=["POST"])
 def start_monitoring(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "UPDATE device SET is_active = 1 WHERE hub_id = ?",
+            "UPDATE device SET is_active = TRUE WHERE hub_id = %s",
             (hub_id,)
         )
         return jsonify({"message": "Monitoring started", "hub_id": hub_id})
@@ -540,9 +550,9 @@ def start_monitoring(hub_id):
 @app.route("/api/hubs/<int:hub_id>/monitoring/stop", methods=["POST"])
 def stop_monitoring(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(
-            "UPDATE device SET is_active = 0 WHERE hub_id = ?",
+            "UPDATE device SET is_active = FALSE WHERE hub_id = %s",
             (hub_id,)
         )
         return jsonify({"message": "Monitoring stopped", "hub_id": hub_id})
@@ -550,9 +560,10 @@ def stop_monitoring(hub_id):
 @app.route("/api/hubs/<int:hub_id>/test-alert", methods=["POST"])
 def test_alert(hub_id):
     with get_db() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        # Get first device for the hub
         cursor.execute(
-            "SELECT device_id FROM device WHERE hub_id = ? LIMIT 1",
+            "SELECT device_id FROM device WHERE hub_id = %s LIMIT 1",
             (hub_id,)
         )
         device_row = cursor.fetchone()
@@ -562,17 +573,18 @@ def test_alert(hub_id):
         device_id = device_row["device_id"]
 
         cursor.execute(
-            "INSERT INTO device_event (device_id, event_type) VALUES (?, 'TEST')",
+            "INSERT INTO device_event (device_id, event_type) VALUES (%s, 'TEST') RETURNING device_event_id",
             (device_id,)
         )
-        device_event_id = cursor.lastrowid
+        device_event_id = cursor.fetchone()["device_event_id"]
 
         cursor.execute(
-            "INSERT INTO alert (hub_id, device_event_id, status) VALUES (?, ?, 'pending')",
+            "INSERT INTO alert (hub_id, device_event_id, status) VALUES (%s, %s, 'pending') RETURNING alert_id",
             (hub_id, device_event_id)
         )
-        alert_id = cursor.lastrowid
-
+        alert_id = cursor.fetchone()["alert_id"]
+        
+        # Send notifications to members via Email-to-SMS
         msg = build_alert_message("TEST")
         sms_notify_results = notify_hub_members(hub_id, msg)
         push_notify_results = notify_hub_users_push(hub_id, msg)
