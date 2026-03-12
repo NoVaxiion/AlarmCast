@@ -10,7 +10,7 @@ HOP_SIZE      = int(SAMPLE_RATE * 1)  # Slide 1 second at a time
 MIN_RMS       = 0.001                 # Silence gate
 
 # Alert Settings 
-REQUIRED_HITS = 3    # Consecutive danger predictions before triggering alarm
+REQUIRED_HITS = 2    # Consecutive danger predictions before triggering alarm
 RESET_TIME    = 3.0  # Seconds before alarm can trigger again
 
 # Key YAMNet Class Indices From CSV
@@ -51,7 +51,7 @@ def yamnet_predict(interpreter, audio_data):
         scores = interpreter.get_tensor(output_details[0]['index'])[0] # Pull 521 class scores
         all_scores.append(scores) # Collect for averaging
 
-    # Each chunk through the loop produces a (521,) array of scores
+    # Each chunk through the loop produces a (521,) array of different scores
     mean_scores = np.mean(all_scores, axis=0)  
 
     # Extract the 5 relevant class scores from the averaged 521-class output
@@ -162,9 +162,14 @@ class FireAlarmListener:
             self.hits       = 0
 
     def trigger_alarm(self, alarm_type, confidence):
-        label = alarm_type.replace("_", " ").upper()
-        print(f"   🚨 {label} DETECTED! (Conf: {confidence:.2f})")
-        yield {'alarm_type': alarm_type, 'confidence': round(confidence, 2), 'status': 201} 
+        if alarm_type == "fire_alarm":
+            label = "fire"
+        else:
+            label = "carbon"
+        
+        ##print(f"   🚨 {label.upper()} DETECTED! (Conf: {confidence:.2f})")
+            
+        yield {'alarm_type': label, 'confidence': round(confidence, 2), 'status': 201} 
 
 
     def start(self):
