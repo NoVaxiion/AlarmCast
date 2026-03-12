@@ -172,7 +172,7 @@ class FireAlarmListener:
         yield {'alarm_type': label, 'confidence': round(confidence, 2), 'status': 201} 
 
 
-    def start(self):
+    def start_listening(self):
         print("Listening...")
         self.stream = sd.InputStream(
             callback=self.audio_callback,
@@ -182,7 +182,7 @@ class FireAlarmListener:
         )
         self.stream.start()
     
-    def stop(self):
+    def stop_listening(self):
         if self.stream:
             self.stream.stop()
             self.stream.close()
@@ -193,8 +193,8 @@ class FireAlarmListener:
 if __name__ == "__main__":
     listener = FireAlarmListener()
     try:
-        listener.start()
+        listener.start_listening()
         while True:
             time.sleep(0.1)
     except KeyboardInterrupt:
-        listener.stop()
+        listener.stop_listening()
