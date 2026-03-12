@@ -1,8 +1,7 @@
+Draw.io-XML-Files
 __pycache__/
-
+ml_small/Noises
 .env
 .vscode/
 .DS_Store
-ml_small/features/
-ml_small/Noises/
-ml_small/active_learning_pool/
+old
