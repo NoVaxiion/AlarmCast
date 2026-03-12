@@ -1,1 +1,4 @@
-fastapi==0.121.0
+#fastapi==0.121.0
+flask
+flask-cors
+passlib[argon2]
