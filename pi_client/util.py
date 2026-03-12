@@ -5,8 +5,7 @@ import requests
 
 
 class Client:
-    def __init__(self, client_id, api_base="http://192.168.137.23:8000", device_id=1, hub_id=1, timeout=10):
-    #def __init__(self, client_id, api_base="http://192.168.0.144:8000", device_id=1, hub_id=1, timeout=10):
+    def __init__(self, client_id, api_base="http://10.194.53.115:8000", device_id=1, hub_id=1, timeout=10):
         self.socket = None
         self.socket_connected = False
 

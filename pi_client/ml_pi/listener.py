@@ -1,10 +1,11 @@
-from util import Client
-import sounddevice as sd
-import tensorflow as tf
-import numpy as np
-import client 
-import time
+import ai_edge_litert.interpreter as tflite
 from datetime import datetime
+import sounddevice as sd
+from util import Client
+#import tensorflow as tf
+import numpy as np
+import time
+
 
 # Configuration
 SAMPLE_RATE   = 16000
@@ -28,7 +29,10 @@ IDX_BUZZER     = 392  # "Buzzer"          — Key CO indicator
 
 def load_yamnet():
     try:
-        interpreter = tf.lite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
+
+        #TF
+        #interpreter = tflite.lite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
+        interpreter = tflite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
         interpreter.allocate_tensors()
         return interpreter
     
