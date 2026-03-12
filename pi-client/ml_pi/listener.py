@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 import time
 
-# Configurations
+# Configuration
 SAMPLE_RATE   = 16000
 WINDOW_SIZE   = int(SAMPLE_RATE * 4)  # 4 second window
 HOP_SIZE      = int(SAMPLE_RATE * 1)  # Slide 1 second at a time
