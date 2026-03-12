@@ -30,7 +30,6 @@ IDX_BUZZER     = 392  # "Buzzer"          — Key CO indicator
 def load_yamnet():
     try:
 
-        #TF
         #interpreter = tflite.lite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
         interpreter = tflite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
         interpreter.allocate_tensors()
