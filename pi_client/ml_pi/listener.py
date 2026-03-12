@@ -1,7 +1,10 @@
+from util import Client
 import sounddevice as sd
 import tensorflow as tf
 import numpy as np
+import client 
 import time
+from datetime import datetime
 
 # Configuration
 SAMPLE_RATE   = 16000
@@ -25,7 +28,7 @@ IDX_BUZZER     = 392  # "Buzzer"          — Key CO indicator
 
 def load_yamnet():
     try:
-        interpreter = tf.lite.Interpreter(model_path="model/yamnet.tflite")
+        interpreter = tf.lite.Interpreter(model_path="ml_pi/model/yamnet.tflite")
         interpreter.allocate_tensors()
         return interpreter
     
@@ -99,12 +102,13 @@ def yamnet_predict(interpreter, audio_data):
 
 
 class FireAlarmListener:
-    def __init__(self):
+    def __init__(self, client):
         self.interpreter  = load_yamnet()
         self.hits         = 0
         self.last_alert   = 0.0
         self.buffer       = []
         self.stream       = None
+        self.client       = client
 
     def audio_callback(self, indata, frames, time_info, status):
         # Sounddevice Error Handler. Catches mic buffer overruns or hardware issues
@@ -163,13 +167,13 @@ class FireAlarmListener:
 
     def trigger_alarm(self, alarm_type, confidence):
         if alarm_type == "fire_alarm":
-            label = "fire"
+            label = "SMOKE"
         else:
-            label = "carbon"
+            label = "CO"
         
         ##print(f"   🚨 {label.upper()} DETECTED! (Conf: {confidence:.2f})")
-            
-        yield {'alarm_type': label, 'confidence': round(confidence, 2), 'status': 201} 
+        alarm_datetime = datetime.now()
+        self.client.send_alarm_notification(label, confidence, alarm_datetime) 
 
 
     def start_listening(self):
