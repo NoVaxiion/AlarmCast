@@ -1,8 +1,5 @@
 __pycache__/
-
+unused/Noises/
 .env
 .vscode/
 .DS_Store
-ml_small/features/
-ml_small/Noises/
-ml_small/active_learning_pool/

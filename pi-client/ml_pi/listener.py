@@ -1,173 +1,195 @@
-from firealarm_net import FireAlarmCRNN
 import sounddevice as sd
+import tensorflow as tf
 import numpy as np
-import librosa
-import joblib
-import torch
 import time
 
+# Configuration
+SAMPLE_RATE   = 16000
+WINDOW_SIZE   = int(SAMPLE_RATE * 4)  # 4 second window
+HOP_SIZE      = int(SAMPLE_RATE * 1)  # Slide 1 second at a time
+MIN_RMS       = 0.001                 # Silence gate
+
+# Alert Settings 
+REQUIRED_HITS = 3    # Consecutive danger predictions before triggering alarm
+RESET_TIME    = 3.0  # Seconds before alarm can trigger again
+
+# Key YAMNet Class Indices From CSV
+# Fire  → IDX_FIRE_ALARM (394) high (0.15+), IDX_SMOKE (393) high (0.40+)
+# CO    → IDX_BEEP (475) + IDX_BUZZER (392) high, IDX_FIRE_ALARM low (<0.15)
+IDX_FIRE_ALARM = 394  # "Fire alarm"      — Most exclusive fire indicator
+IDX_SMOKE      = 393  # "Smoke detector"  — High for fire, moderate for CO
+IDX_ALARM      = 382  # "Alarm"           — High for both
+IDX_BEEP       = 475  # "Beep, bleep"     — Key CO indicator
+IDX_BUZZER     = 392  # "Buzzer"          — Key CO indicator
+
+
+def load_yamnet():
+    try:
+        interpreter = tf.lite.Interpreter(model_path="model/yamnet.tflite")
+        interpreter.allocate_tensors()
+        return interpreter
+    
+    except Exception as e:
+        print(f"Failed to load YAMNet: {e}")
+        exit(1)
+
+
+def yamnet_predict(interpreter, audio_data):
+    input_details  = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    # Yamnet Input shape is [1 x 15600]
+    # As Live Audio Input is [1 x 16000]
+    CHUNK_SIZE = 15600  # 0.975s at 16kHz
+
+    # Run YAMNet on each 0.975s chunk of the 4-second window
+    all_scores = []
+    for start in range(0, len(audio_data) - CHUNK_SIZE + 1, CHUNK_SIZE):
+        chunk = audio_data[start:start + CHUNK_SIZE].astype(np.float32) # Slice 15600 samples
+        interpreter.set_tensor(input_details[0]['index'], chunk.reshape(15600)) # Load into YAMNet
+        interpreter.invoke() # Run inference
+        scores = interpreter.get_tensor(output_details[0]['index'])[0] # Pull 521 class scores
+        all_scores.append(scores) # Collect for averaging
+
+    # Each chunk through the loop produces a (521,) array of scores
+    mean_scores = np.mean(all_scores, axis=0)  
+
+    # Extract the 5 relevant class scores from the averaged 521-class output
+    score_fire  = float(mean_scores[IDX_FIRE_ALARM])
+    score_smoke = float(mean_scores[IDX_SMOKE])
+    score_alarm = float(mean_scores[IDX_ALARM])
+    score_beep  = float(mean_scores[IDX_BEEP])
+    score_buzz  = float(mean_scores[IDX_BUZZER])
+
+    # Rule 1 — Fire Alarm: Fire class dominant, or smoke very high with some fire signal
+    if score_fire > 0.15 or (score_smoke > 0.40 and score_fire > 0.08):
+        predicted = 'fire_alarm'
+        conf = min(score_fire + score_smoke * 0.3 + score_alarm * 0.2, 1.0)
+
+    # Rule 2 — CO: Beep/Buzzer dominant, fire and smoke alarm both low
+    elif (score_beep > 0.15 or score_buzz > 0.15) and score_fire < 0.15 and score_smoke < 0.25:
+        predicted = 'carbon_alarm'
+        conf = min((score_beep + score_buzz) * 1.2, 1.0)
+
+    # Rule 3 — Ambiguous: something alarm-like but unclear, tiebreak on raw scores
+    elif score_alarm > 0.20 or score_smoke > 0.20:
+        if score_fire >= score_beep + score_buzz:
+            predicted = 'fire_alarm'
+            conf      = min(score_fire + score_smoke * 0.2, 1.0)
+        else:
+            predicted = 'carbon_alarm'
+            conf      = min(score_beep + score_buzz + score_alarm * 0.2, 1.0)
+    
+    # Rule 4 — Nothing crossed any threshold
+    else:
+        predicted = 'Random'
+        conf      = max(0.0, 1.0 - max(score_fire, score_beep, score_alarm))
+
+    # Package scores for logging as fire and CO are the primary signals, rest are supporting
+    breakdown = {
+        'fire':   round(score_fire,  3),
+        'co':     round(max(score_beep, score_buzz), 3),
+        'smoke':  round(score_smoke, 3),
+        'alarm':  round(score_alarm, 3),
+        'beep':   round(score_beep,  3),
+        'buzzer': round(score_buzz,  3),
+    }
+
+    return predicted, conf, breakdown
+
+
 class FireAlarmListener:
-    def __init__(self, model_path='model/model.pt', rf_path='model/rf_model.pkl'):
-        """ Loading both CNN and RF Models with Configurations"""
-
-        self.sample_rate = 16000
-        self.mel_bands = 32
-        self.window_size = int(self.sample_rate * 5) # 5 seconds
-        self.hop = int(self.sample_rate * 1)         # Slide 1 sec at a time
-        
-        # Alert Settings
-        self.required_hits = 2   
-        self.reset_time = 3.0
-        self.min_rms = 0.001  # Minimum volume to even bother processing
-        
-        # State
-        self.buffer = []
-        self.hits = 0
-        self.last_alert = 0.0
-        self.running = False
-        self.stream = None
-
-        # CLASS NAMES (Alphabetical to match LabelEncoder) 
-        self.classes = ['appliance', 'carbon', 'fire', 'siren']
-
-        # LOAD MODEL 1: CNN (Visual)
-        self.cnn_model = FireAlarmCRNN(num_classes=4)
-        try:
-            checkpoint = torch.load(model_path, map_location="cpu")
-            if "state_dict" in checkpoint:
-                self.cnn_model.load_state_dict(checkpoint["state_dict"])
-            else:
-                self.cnn_model.load_state_dict(checkpoint)
-            self.cnn_model.eval()
-            print("CNN Model loaded.")
-        except Exception as e:
-            print(f"Error loading CNN: {e}")
-            exit()
-
-        # LOAD BRAIN 2: Random Forest (Math)
-        try:
-            self.rf_model = joblib.load(rf_path)
-            print("Random Forest loaded.")
-        except Exception as e:
-            print(f"Error loading RF: {e}")
-            exit()
-
-    def extract_rf_features(self, audio_data):
-        """Extracts the exact same 1D stats vector we used in training."""
-        sr = self.sample_rate
-        try:
-            mfcc = np.mean(librosa.feature.mfcc(y=audio_data, sr=sr, n_mfcc=40).T, axis=0)
-            centroid = np.mean(librosa.feature.spectral_centroid(y=audio_data, sr=sr))
-            rolloff = np.mean(librosa.feature.spectral_rolloff(y=audio_data, sr=sr))
-            bandwidth = np.mean(librosa.feature.spectral_bandwidth(y=audio_data, sr=sr))
-            contrast = np.mean(librosa.feature.spectral_contrast(y=audio_data, sr=sr).T, axis=0)
-            zcr = np.mean(librosa.feature.zero_crossing_rate(audio_data))
-            rms = np.mean(librosa.feature.rms(y=audio_data))
-            chroma = np.mean(librosa.feature.chroma_stft(y=audio_data, sr=sr).T, axis=0)
-            
-            return np.hstack([mfcc, centroid, rolloff, bandwidth, contrast, zcr, rms, chroma])
-        except Exception as e:
-            print(f"Feature extraction error: {e}")
-            return np.zeros(288)
+    def __init__(self):
+        self.interpreter  = load_yamnet()
+        self.hits         = 0
+        self.last_alert   = 0.0
+        self.buffer       = []
+        self.stream       = None
 
     def audio_callback(self, indata, frames, time_info, status):
+        # Sounddevice Error Handler. Catches mic buffer overruns or hardware issues
         if status:
-            print(f"Status: {status}")
+            print(f"Stream status: {status}")
             return
 
-        # 1. Capture Audio
+        # 1. Capture Audio (Known as Buffer)
         self.buffer.extend(indata[:, 0].astype(np.float32))
-        
-        if len(self.buffer) < self.window_size:
+
+        if len(self.buffer) < WINDOW_SIZE:
             return
 
-        # 2. Extract 5s Segment
-        seg = np.array(self.buffer[:self.window_size], dtype=np.float32)
-        del self.buffer[:self.hop] 
+        # 2. Extract 4 Second Segment and Advance Buffer by 1 Second
+        seg = np.array(self.buffer[:WINDOW_SIZE], dtype=np.float32)
+        del self.buffer[:HOP_SIZE]
 
-        # 3. Silence Gate (Save CPU)
-        vol = np.sqrt(np.mean(seg**2))
-        if vol < self.min_rms:
+        # 3. Silence gate. (Skips silences and resets beep hits)
+        if np.sqrt(np.mean(seg**2)) < MIN_RMS:
             self.hits = 0
             return
 
-        # CNN PREDICTION
-        mel = librosa.feature.melspectrogram(y=seg, sr=self.sample_rate, n_mels=self.mel_bands)
-        mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
-        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-8)
-        
-        x = torch.from_numpy(mel_db)[None, None, :, :]
-        with torch.inference_mode():
-            cnn_probs = torch.softmax(self.cnn_model(x), dim=1).numpy()[0]
+        # 4. Predict
+        try:
+            predicted_class, conf, breakdown = yamnet_predict(self.interpreter, seg)
+        except Exception as e:
+            print(f"Prediction error: {e}")
+            return
 
-        # RF PREDICTION
-        rf_feats = self.extract_rf_features(seg)
-        rf_probs = self.rf_model.predict_proba([rf_feats])[0]
+        # 5. Log prediction
+        is_danger = predicted_class in ['fire_alarm', 'carbon_alarm']
 
-        # BOTH VOTES
-        final_probs = (cnn_probs + rf_probs) / 2
-        
-        # Identify Winner
-        pred_idx = np.argmax(final_probs)
-        predicted_class = self.classes[pred_idx]
-        conf = final_probs[pred_idx]
+        if is_danger:
+            print(f"\n\n\n{predicted_class.upper()} ({conf:.2f})")
+            print(f"   🔥 Fire: {breakdown['fire']:.3f}  💨 CO: {breakdown['co']:.3f}")
+            print(f"   Smoke={breakdown['smoke']}  Alarm={breakdown['alarm']}  Beep={breakdown['beep']}  Buzzer={breakdown['buzzer']}")
 
-        # CO ALARM FREQUENCY BOOST 
-        spectral_centroid = rf_feats[40] 
-        if spectral_centroid > 2500 and predicted_class == 'carbon':
-             conf += 0.15 
-             print(f"High Frequency ({spectral_centroid:.0f}Hz) detected - Boosting CO confidence.")
-
-        # --- SAFETY & LOGIC ---
-        print(f"\n  Prediction: {predicted_class.upper()} ({conf:.2f})")
-        print(f"   [CNN Vote]: {dict(zip(self.classes, np.round(cnn_probs, 2)))}")
-        print(f"   [RF  Vote]: {dict(zip(self.classes, np.round(rf_probs, 2)))}")
-
-        is_danger = predicted_class in ['fire', 'carbon']
-        
-        if is_danger and conf > 0.80:
+        # 6. Hit counter. Requires consecutive danger predictions
+        if is_danger and conf > 0.60:
             self.hits += 1
-        elif is_danger and conf > 0.40:
-            print("  POTENTIAL DANGER - Low Confidence.")
-            self.hits += 1 
+            print(f"   ⚠️  Danger hit {self.hits}/{REQUIRED_HITS}")
+
+        elif is_danger and conf > 0.35:
+            self.hits += 1
+            print(f"   ⚠️  Low confidence danger hit {self.hits}/{REQUIRED_HITS}")
+
         else:
             self.hits = 0
 
-        # Trigger Event
+        # 7. Trigger alarm if enough consecutive hits and cooldown passed
         now = time.monotonic()
-        if self.hits >= self.required_hits and (now - self.last_alert) >= self.reset_time:
-            self.on_alarm_detected(conf, predicted_class) 
+        if self.hits >= REQUIRED_HITS and (now - self.last_alert) >= RESET_TIME:
+            self.trigger_alarm(predicted_class, conf)
             self.last_alert = now
-            self.hits = 0
+            self.hits       = 0
 
-    def on_alarm_detected(self, confidence, alarm_type="Alarm"):
-        print(f'\n  {alarm_type.replace("_", " ").upper()} DETECTED! (Conf: {confidence:.2f})\n')
+    def trigger_alarm(self, alarm_type, confidence):
+        label = alarm_type.replace("_", " ").upper()
+        print(f"   🚨 {label} DETECTED! (Conf: {confidence:.2f})")
         yield {'alarm_type': alarm_type, 'confidence': round(confidence, 2), 'status': 201} 
 
-    def start_listening(self):
-        if self.running: return
-        print(f' Listening... (Ensembling Mode)')
-        self.running = True
+
+    def start(self):
+        print("Listening...")
         self.stream = sd.InputStream(
             callback=self.audio_callback,
             channels=1,
-            samplerate=self.sample_rate,
+            samplerate=SAMPLE_RATE,
             dtype='float32'
         )
         self.stream.start()
     
-    def stop_listening(self):
+    def stop(self):
         if self.stream:
             self.stream.stop()
             self.stream.close()
             self.stream = None
-        self.running = False
-        print("Listener stopped.")
+        print("\nListener stopped.")
+
 
 if __name__ == "__main__":
     listener = FireAlarmListener()
     try:
-        listener.start_listening()
-        while True: time.sleep(0.1)
+        listener.start()
+        while True:
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        listener.stop_listening()
+        listener.stop()
