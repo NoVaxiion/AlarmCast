@@ -164,7 +164,8 @@ class FireAlarmListener:
     def trigger_alarm(self, alarm_type, confidence):
         label = alarm_type.replace("_", " ").upper()
         print(f"   🚨 {label} DETECTED! (Conf: {confidence:.2f})")
-        #YIELD
+        yield {'alarm_type': alarm_type, 'confidence': round(confidence, 2), 'status': 201} 
+
 
     def start(self):
         print("Listening...")
