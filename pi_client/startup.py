@@ -1,6 +1,7 @@
+from ml_pi.usb_listener import FireAlarmListener
+#from ml_pi.camera_listener import FireAlarmListener
 from datetime import datetime
 from util import Client
-from ml_pi.listener import FireAlarmListener
 import ml_pi
 import socket
 import time
@@ -89,7 +90,8 @@ def demo(client):
             print(f"{GREEN}Notification result:{RESET} {result}")
 
     else:
-        listener = ml_pi.listener.FireAlarmListener(client)
+        #listener = ml_pi.listener.FireAlarmListener(client)
+        listener = FireAlarmListener(client)
 
         def alarm_hook(confidence, alarm_type="Alarm"):
             current_time = datetime.now()
