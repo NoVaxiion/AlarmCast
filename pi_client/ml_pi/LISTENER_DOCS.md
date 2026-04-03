@@ -229,7 +229,7 @@ from ml_pi.usb_listener import FireAlarmListener
 
 **Problem:** `blocksize=96000` (2 seconds) meant the OS only needed to schedule the audio callback once every 2 seconds. On a busy Pi, OS scheduling jitter could delay that callback long enough to overflow the hardware buffer. It also meant inference fired every 2s even though HOP_SIZE was 1s.
 
-**Fix:** Reduced `blocksize` to match `HOP_SIZE` so inference fires at the intended rate. Later set to `24000` (0.5s) on the delete\_ test version to further reduce overflow risk.
+**Fix:** After HOP_SIZE was increased to 2s, `blocksize` was kept at `96000` to match it. The `delete_` test version uses `24000` (0.5s) to further reduce overflow risk during testing.
 
 ### 4. `get_input_details()` / `get_output_details()` Called Every Inference
 

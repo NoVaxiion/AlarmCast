@@ -1,4 +1,5 @@
 import ai_edge_litert.interpreter as tflite
+#from ml_pi.audio_saver import AudioSaver
 from datetime import datetime
 import sounddevice as sd
 from util import Client
@@ -121,8 +122,9 @@ class BaseAlarmListener:
         self.ring_full         = False
 
         # Queue carries only the write index (an int) - zero allocation in callback
-        self.infer_queue = queue.Queue(maxsize=2)
-        self.worker      = threading.Thread(target=self._inference_worker, daemon=True)
+        self.infer_queue  = queue.Queue(maxsize=2)
+        self.worker       = threading.Thread(target=self._inference_worker, daemon=True)
+        #self.audio_saver  = AudioSaver(self.SAMPLE_RATE)
         self.worker.start()
 
     def _inference_worker(self):
@@ -188,6 +190,7 @@ class BaseAlarmListener:
         # 1. Capture Audio - write into ring buffer via fast numpy slice assignment
         #    Wraps around if chunk straddles the end of the buffer
         chunk = indata[:, 0]  # No astype - stream is already float32
+        #self.audio_saver.feed(chunk)
         end   = self.w_idx + frames
         if end <= self.window_size:
             self.ring[self.w_idx:end] = chunk
@@ -218,6 +221,7 @@ class BaseAlarmListener:
     def trigger_alarm(self, alarm_type, confidence):
         label = "SMOKE" if alarm_type == "fire_alarm" else "CO"
         print(f"   🚨 {label} DETECTED! (Conf: {confidence:.2f})")
+        #self.audio_saver.save(alarm_type)
         self.client.send_alarm_notification(label, confidence, datetime.now())
 
     def start_listening(self):
