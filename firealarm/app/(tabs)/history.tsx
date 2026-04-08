@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { Audio } from 'expo-av';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,89 +12,197 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as API from '../../constants/api';
 
 interface HistoryItem {
-  id: string;
-  time: string;
-  level: number;
-  type: string;
-  location: string;
-  duration: string;
+  alert_id: number;
+  event_type: string;
+  detected_at: string;
+  device_id: number;
+  status: string;
+  audio_url?: string | null;
 }
 
 export default function History() {
-  const [history] = useState<HistoryItem[]>([
-    {
-      id: '1',
-      time: '2025-10-29 14:30',
-      level: 85,
-      type: 'Alert',
-      location: 'Kitchen',
-      duration: '00:45',
-    },
-    {
-      id: '2',
-      time: '2025-10-29 10:15',
-      level: 72,
-      type: 'Alert',
-      location: 'Bedroom',
-      duration: '01:12',
-    },
-    {
-      id: '3',
-      time: '2025-10-28 22:08',
-      level: 0,
-      type: 'Test',
-      location: 'Living Room',
-      duration: '00:30',
-    },
-  ]);
-
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const [playingId, setPlayingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    loadHistory();
+
+    const setupAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+      } catch (error) {
+        console.log('History audio mode error:', error);
+      }
+    };
+
+    setupAudio();
+
+    return () => {
+      unloadSound();
+    };
+  }, []);
+
+  const unloadSound = async () => {
+    try {
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+    } catch (error) {
+      console.log('History unload error:', error);
+    }
+    setPlayingId(null);
+  };
+
+  const loadHistory = async () => {
+    try {
+      setLoading(true);
+      const hubId = 1;
+      const data = await API.getAlertHistory(hubId);
+      setHistory(Array.isArray(data) ? data : []);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load alert history.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const playRecording = async (item: HistoryItem) => {
+    try {
+      if (!item.audio_url) {
+        Alert.alert('No Recording', 'This alert has no recording available.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: item.audio_url },
+        {
+          shouldPlay: false,
+          volume: 1.0,
+          progressUpdateIntervalMillis: 250,
+        }
+      );
+
+      soundRef.current = sound;
+      setPlayingId(item.alert_id);
+
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        if (status.didJustFinish) {
+          setPlayingId(null);
+        }
+      });
+
+      await sound.playAsync();
+    } catch (error) {
+      console.log('History playback error:', error);
+      Alert.alert('Playback Error', 'Could not play recording.');
+      setPlayingId(null);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      if (soundRef.current) {
+        await soundRef.current.stopAsync();
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+    } catch (error) {
+      console.log('History stop error:', error);
+    }
+    setPlayingId(null);
+  };
+
+  const closeModal = async () => {
+    setSelectedItem(null);
+    await unloadSound();
+  };
+
+  const formatTime = (value: string) => {
+    return new Date(value).toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+    });
+  };
+
+  const getCardStyle = (type: string) => {
+    const upper = type.toUpperCase();
+    if (upper === 'TEST') return styles.testItem;
+    return styles.alertItem;
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={loadHistory} />
+        }
       >
         <View style={styles.header}>
           <Text style={styles.headerText}>Alert History</Text>
           <Text style={styles.count}>{history.length} records</Text>
         </View>
 
-        <View style={styles.list}>
-          {history.map((item) => (
-            <TouchableOpacity
-              key={item.id}
-              style={[
-                styles.item,
-                item.type === 'Alert' && styles.alertItem,
-                item.type === 'Test' && styles.testItem,
-              ]}
-              onPress={() => setSelectedItem(item)}
-            >
-              <View>
-                <Text style={styles.type}>{item.type}</Text>
-                <Text style={styles.time}>{item.time}</Text>
-                {item.level > 0 && <Text style={styles.level}>{item.level} dB</Text>}
+        {loading && history.length === 0 ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color="#11daabff" />
+          </View>
+        ) : (
+          <View style={styles.list}>
+            {history.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>No alert history yet</Text>
               </View>
-              <Text style={styles.arrow}>›</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            ) : (
+              history.map((item) => (
+                <TouchableOpacity
+                  key={item.alert_id.toString()}
+                  style={[styles.item, getCardStyle(item.event_type)]}
+                  onPress={() => setSelectedItem(item)}
+                >
+                  <View>
+                    <Text style={styles.type}>{item.event_type}</Text>
+                    <Text style={styles.time}>{formatTime(item.detected_at)}</Text>
+                    <Text style={styles.level}>Device #{item.device_id}</Text>
+                  </View>
+                  <Text style={styles.arrow}>›</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
       </ScrollView>
 
-      {/* Detail Modal with Audio Playback */}
       <Modal
         visible={selectedItem !== null}
         animationType="fade"
         transparent={true}
-        onRequestClose={() => {
-          setSelectedItem(null);
-          setIsPlaying(false);
-        }}
+        onRequestClose={closeModal}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -98,66 +210,67 @@ export default function History() {
               <>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Alert Details</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setSelectedItem(null);
-                      setIsPlaying(false);
-                    }}
-                  >
+                  <TouchableOpacity onPress={closeModal}>
                     <Text style={styles.closeText}>Close</Text>
                   </TouchableOpacity>
                 </View>
 
                 <View style={styles.detailRow}>
                   <Text style={styles.label}>Type:</Text>
-                  <Text style={styles.value}>{selectedItem.type}</Text>
+                  <Text style={styles.value}>{selectedItem.event_type}</Text>
                 </View>
 
                 <View style={styles.detailRow}>
                   <Text style={styles.label}>Time:</Text>
-                  <Text style={styles.value}>{selectedItem.time}</Text>
+                  <Text style={styles.value}>
+                    {formatTime(selectedItem.detected_at)}
+                  </Text>
                 </View>
 
                 <View style={styles.detailRow}>
-                  <Text style={styles.label}>Location:</Text>
-                  <Text style={styles.value}>{selectedItem.location}</Text>
+                  <Text style={styles.label}>Device:</Text>
+                  <Text style={styles.value}>{selectedItem.device_id}</Text>
                 </View>
-
-                {selectedItem.level > 0 && (
-                  <View style={styles.detailRow}>
-                    <Text style={styles.label}>Sound Level:</Text>
-                    <Text style={styles.value}>{selectedItem.level} dB</Text>
-                  </View>
-                )}
 
                 <View style={styles.detailRow}>
-                  <Text style={styles.label}>Duration:</Text>
-                  <Text style={styles.value}>{selectedItem.duration}</Text>
+                  <Text style={styles.label}>Status:</Text>
+                  <Text style={styles.value}>{selectedItem.status}</Text>
                 </View>
 
-                {/* Audio Playback Section */}
                 <View style={styles.audioSection}>
                   <Text style={styles.audioTitle}>Recording</Text>
 
-                  {/* Progress Bar */}
                   <View style={styles.progressBar}>
                     <View
-                      style={[styles.progressFill, { width: isPlaying ? '60%' : '0%' }]}
+                      style={[
+                        styles.progressFill,
+                        {
+                          width:
+                            playingId === selectedItem.alert_id ? '60%' : '0%',
+                        },
+                      ]}
                     />
                   </View>
 
                   <View style={styles.timeRow}>
-                    <Text style={styles.timeLabel}>{isPlaying ? '00:27' : '00:00'}</Text>
-                    <Text style={styles.timeLabel}>{selectedItem.duration}</Text>
+                    <Text style={styles.timeLabel}>
+                      {playingId === selectedItem.alert_id ? 'Playing...' : 'Ready'}
+                    </Text>
+                    <Text style={styles.timeLabel}>
+                      {selectedItem.audio_url ? 'Audio available' : 'No audio'}
+                    </Text>
                   </View>
 
-                  {/* Play/Pause Button */}
                   <TouchableOpacity
                     style={styles.playButton}
-                    onPress={() => setIsPlaying(!isPlaying)}
+                    onPress={() =>
+                      playingId === selectedItem.alert_id
+                        ? stopRecording()
+                        : playRecording(selectedItem)
+                    }
                   >
                     <Text style={styles.playButtonText}>
-                      {isPlaying ? 'Pause' : 'Play'}
+                      {playingId === selectedItem.alert_id ? 'Stop' : 'Play'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -200,8 +313,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#aaa',
   },
+  loadingWrap: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   list: {
     flexGrow: 1,
+  },
+  emptyBox: {
+    marginTop: 20,
+    padding: 20,
+    borderRadius: 8,
+    backgroundColor: '#071d50ff',
+    borderWidth: 1,
+    borderColor: '#11daabff',
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#fff',
+    fontSize: 15,
   },
   item: {
     flexDirection: 'row',
@@ -283,6 +414,8 @@ const styles = StyleSheet.create({
   value: {
     color: '#fff',
     fontSize: 16,
+    maxWidth: '60%',
+    textAlign: 'right',
   },
   audioSection: {
     marginTop: 20,

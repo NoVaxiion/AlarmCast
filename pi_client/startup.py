@@ -1,4 +1,5 @@
-from ml_pi.usb_listener import FireAlarmListener
+from ml_pi.mac_listener import FireAlarmListener
+#from ml_pi.usb_listener import FireAlarmListener
 #from ml_pi.camera_listener import FireAlarmListener
 from datetime import datetime
 from util import Client

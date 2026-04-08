@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_BASE } from '../constants/api';
+
 
 export default function Register() {
   const [name, setName] = useState('');
@@ -26,7 +28,6 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const API_BASE = "http://18.117.246.113:8000";
       const response = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

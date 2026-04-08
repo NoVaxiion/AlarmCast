@@ -28,3 +28,6 @@ __pycache__/
 
 # Expo / ngrok
 **/ngrok
+
+#api
+uploads/

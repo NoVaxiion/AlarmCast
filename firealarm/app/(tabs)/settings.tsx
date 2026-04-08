@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Picker } from '@react-native-picker/picker';
+import { API_BASE } from '../../constants/api';
 
 interface Contact {
   id: string;
@@ -24,7 +25,7 @@ interface Contact {
 export default function Settings() {
   const router = useRouter();
 
-  const API_BASE = 'http://192.168.0.144:8000';
+ 
   const HUB_ID = 1;
 
   const [notifications, setNotifications] = useState(true);

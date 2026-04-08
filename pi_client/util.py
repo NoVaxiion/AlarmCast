@@ -2,10 +2,11 @@ import json
 import socket
 import sounddevice as sd
 import requests
+from config import BASE_URL
 
 
 class Client:
-    def __init__(self, client_id, api_base="http://10.194.53.115:8000", device_id=1, hub_id=1, timeout=10):
+    def __init__(self, client_id, api_base=BASE_URL, device_id=1, hub_id=1, timeout=10):
         self.socket = None
         self.socket_connected = False
 
@@ -95,7 +96,7 @@ class Client:
             return "TEST"
         return value.upper()
 
-    def send_alarm_notification(self, alarm_type, confidence, alarm_datetime):
+    def send_alarm_notification(self, alarm_type, confidence, alarm_datetime, audio_url=None):
         normalized_alarm_type = self.normalize_alarm_type(alarm_type)
 
         event_url = f"{self.api_base}/api/devices/{self.device_id}/events"
@@ -137,6 +138,8 @@ class Client:
             "hub_id": self.hub_id,
             "device_event_id": device_event_id
         }
+        if audio_url:
+            alert_payload["audio_url"] = audio_url
 
         alert_response = requests.post(alert_url, json=alert_payload, timeout=self.timeout)
 
@@ -173,3 +176,7 @@ def get_host():
 
 def get_port():
     return 65432
+
+
+
+

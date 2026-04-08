@@ -10,13 +10,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { setupPushForLoggedInUser } from '../services/notifications';
+import { API_BASE } from '../constants/api';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const API_BASE = 'http://192.168.0.144:8000';
+
+
+
+if (!API_BASE) {
+  Alert.alert('Error', 'API base URL is missing');
+  setLoading(false);
+  return;
+}
 
   const handleLogin = async () => {
     setLoading(true);

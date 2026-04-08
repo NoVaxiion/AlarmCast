@@ -1,18 +1,24 @@
 import ai_edge_litert.interpreter as tflite
-#from ml_pi.audio_saver import AudioSaver
+from config import BASE_URL
 from datetime import datetime
 import sounddevice as sd
 from util import Client
 import numpy as np
 import threading
+import tempfile
+import requests
+import soundfile as sf
 import queue
 import time
+import os
 
 
 # Alert Settings
 REQUIRED_HITS = 2    # Consecutive danger predictions before triggering alarm
 RESET_TIME    = 3.0  # Seconds before alarm can trigger again
 MIN_RMS       = 0.001
+API_BASE = BASE_URL.rstrip("/")
+
 
 # Key YAMNet Class Indices From CSV
 # Fire  → IDX_FIRE_ALARM (394) high (0.30+), or (0.15+ with smoke>0.25 or alarm>0.22)
@@ -101,6 +107,10 @@ class BaseAlarmListener:
     DOWNSAMPLE  = 1     # Factor to downsample to 16kHz (e.g. 3 for 48kHz → 16kHz)
     BLOCK_SIZE  = None  # Hardware buffer size in samples
 
+    # Clip settings
+    PRE_TRIGGER_SECONDS = 3
+    POST_TRIGGER_SECONDS = 2
+
     def __init__(self, client):
         self.interpreter    = load_yamnet()
         self.input_details  = self.interpreter.get_input_details()
@@ -124,8 +134,19 @@ class BaseAlarmListener:
         # Queue carries only the write index (an int) - zero allocation in callback
         self.infer_queue  = queue.Queue(maxsize=2)
         self.worker       = threading.Thread(target=self._inference_worker, daemon=True)
-        #self.audio_saver  = AudioSaver(self.SAMPLE_RATE)
         self.worker.start()
+
+        # Audio clip recording state
+        self.pre_trigger_samples  = self.SAMPLE_RATE * self.PRE_TRIGGER_SECONDS
+        self.post_trigger_samples = self.SAMPLE_RATE * self.POST_TRIGGER_SECONDS
+        self.rolling_audio = np.array([], dtype=np.float32)
+
+        self.pending_alert = False
+        self.pending_alarm_type = None
+        self.pending_confidence = None
+        self.pending_alarm_datetime = None
+        self.pending_pre_trigger_audio = None
+        self.pending_post_trigger_audio = np.array([], dtype=np.float32)
 
     def _inference_worker(self):
         """Runs in background thread - handles all array work and YAMNet inference."""
@@ -190,7 +211,38 @@ class BaseAlarmListener:
         # 1. Capture Audio - write into ring buffer via fast numpy slice assignment
         #    Wraps around if chunk straddles the end of the buffer
         chunk = indata[:, 0]  # No astype - stream is already float32
-        #self.audio_saver.feed(chunk)
+
+        # 2. Maintain rolling pre-trigger audio buffer (native sample rate)
+        self.rolling_audio = np.concatenate((self.rolling_audio, chunk))
+        if len(self.rolling_audio) > self.pre_trigger_samples:
+            self.rolling_audio = self.rolling_audio[-self.pre_trigger_samples:]
+
+        # 3. Collect post-trigger audio after an alarm is detected
+        if self.pending_alert:
+            self.pending_post_trigger_audio = np.concatenate(
+                (self.pending_post_trigger_audio, chunk)
+            )
+            if len(self.pending_post_trigger_audio) >= self.post_trigger_samples:
+                post_audio   = self.pending_post_trigger_audio[:self.post_trigger_samples]
+                pre_audio    = self.pending_pre_trigger_audio.copy()
+                alarm_type   = self.pending_alarm_type
+                confidence   = self.pending_confidence
+                alarm_dt     = self.pending_alarm_datetime
+
+                self.pending_alert               = False
+                self.pending_alarm_type          = None
+                self.pending_confidence          = None
+                self.pending_alarm_datetime      = None
+                self.pending_pre_trigger_audio   = None
+                self.pending_post_trigger_audio  = np.array([], dtype=np.float32)
+
+                full_clip = np.concatenate((pre_audio, post_audio))
+                threading.Thread(
+                    target=self.process_and_send_alert,
+                    args=(alarm_type, confidence, alarm_dt, full_clip),
+                    daemon=True
+                ).start()
+
         end   = self.w_idx + frames
         if end <= self.window_size:
             self.ring[self.w_idx:end] = chunk
@@ -221,12 +273,66 @@ class BaseAlarmListener:
     def trigger_alarm(self, alarm_type, confidence):
         label = "SMOKE" if alarm_type == "fire_alarm" else "CO"
         print(f"   🚨 {label} DETECTED! (Conf: {confidence:.2f})")
-        #self.audio_saver.save(alarm_type)
-        self.client.send_alarm_notification(label, confidence, datetime.now())
+
+        if not self.pending_alert:
+            self.pending_alert              = True
+            self.pending_alarm_type         = alarm_type
+            self.pending_confidence         = confidence
+            self.pending_alarm_datetime     = datetime.now()
+            self.pending_pre_trigger_audio  = self.rolling_audio.copy()
+            self.pending_post_trigger_audio = np.array([], dtype=np.float32)
+            print(f"   Collecting {self.POST_TRIGGER_SECONDS}s of post-trigger audio...")
+
+    def process_and_send_alert(self, alarm_type, confidence, alarm_datetime, full_clip):
+        label = "SMOKE" if alarm_type == "fire_alarm" else "CO"
+        audio_url     = None
+        temp_file_path = None
+
+        try:
+            clip = full_clip.astype(np.float32)
+
+            # Downsample to 16kHz if captured at a higher rate
+            if self.DOWNSAMPLE > 1:
+                clip = clip[::self.DOWNSAMPLE]
+
+            save_rate = self.SAMPLE_RATE // self.DOWNSAMPLE
+
+            # DC offset removal + normalize to 95% peak
+            clip = clip - np.mean(clip)
+            peak = np.max(np.abs(clip))
+            if peak > 0:
+                clip = clip / peak
+            clip = np.clip(clip * 0.95, -1.0, 1.0)
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                temp_file_path = tmp.name
+
+            sf.write(temp_file_path, clip.reshape(-1, 1), save_rate, subtype="PCM_16")
+            audio_url = self.upload_audio_file(temp_file_path)
+            print(f"   Audio uploaded: {audio_url}")
+
+        except Exception as e:
+            print(f"   Audio capture/upload failed: {e}")
+            audio_url = None
+
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception:
+                    pass
+
+        try:
+            result = self.client.send_alarm_notification(
+                label, confidence, alarm_datetime, audio_url=audio_url
+            )
+            print("   Alert result:", result)
+        except Exception as e:
+            print(f"   Failed to send alert notification: {e}")
 
     def start_listening(self):
         raise NotImplementedError("Subclass must implement start_listening()")
-
+    
     def stop_listening(self):
         if self.stream:
             self.stream.stop()
@@ -235,3 +341,16 @@ class BaseAlarmListener:
         self.infer_queue.put(None)
         self.worker.join()
         print("\nListener stopped.")
+    
+    def upload_audio_file(self, file_path):
+        url = f"{API_BASE}/api/audio/upload"
+
+        with open(file_path, "rb") as audio_file:
+            files = {
+                "audio": (os.path.basename(file_path), audio_file, "audio/wav")
+            }
+            response = requests.post(url, files=files, timeout=30)
+
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("audio_url")
