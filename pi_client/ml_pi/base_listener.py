@@ -15,7 +15,7 @@ import os
 
 # Alert Settings
 REQUIRED_HITS = 2    # Consecutive danger predictions before triggering alarm
-RESET_TIME    = 3.0  # Seconds before alarm can trigger again
+RESET_TIME    = 10.0  # Seconds before alarm can trigger again
 MIN_RMS       = 0.001
 API_BASE = BASE_URL.rstrip("/")
 
