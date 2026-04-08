@@ -3,3 +3,4 @@ unused/Noises/
 .env
 .vscode/
 .DS_Store
+backend/api/uploads/
