@@ -29,6 +29,12 @@ IDX_ALARM       = 382  # "Alarm"           - High for both
 IDX_BEEP        = 475  # "Beep, bleep"     - Key CO indicator
 IDX_BUZZER      = 392  # "Buzzer"          - Key CO indicator
 
+CO_TONE_LOW_HZ  = 3450
+CO_TONE_HIGH_HZ = 3550
+CO_TONE_MIN_RATIO = 0.25
+CO_TONE_FIRE_MAX  = 0.15
+CO_TONE_SMOKE_MAX = 0.15
+
 
 def load_yamnet():
     try:
@@ -63,6 +69,7 @@ def yamnet_predict(interpreter, input_details, output_details, audio_data):
     score_alarm = float(mean_scores[IDX_ALARM])
     score_beep  = float(mean_scores[IDX_BEEP])
     score_buzz  = float(mean_scores[IDX_BUZZER])
+    score_co_tone = detect_carbon_tone(audio_data)
 
     # Rule 1 - Fire Alarm: Fire dominant, fire+smoke elevated, or fire+alarm elevated
     if score_fire > 0.30 or (score_fire > 0.15 and score_smoke > 0.25) or (score_fire > 0.15 and score_alarm > 0.22):
@@ -73,6 +80,16 @@ def yamnet_predict(interpreter, input_details, output_details, audio_data):
     elif (score_beep > 0.15 or score_buzz > 0.15) and score_fire < 0.30 and score_smoke < 0.25:
         predicted = 'carbon_alarm'
         conf = min((score_beep + score_buzz) * 1.2, 1.0)
+
+    # Rule 2B - CO tone fallback: catches local 3.5 kHz CO-alarm tone that
+    # YAMNet does not reliably expose through the beep/buzzer classes.
+    elif (
+        score_co_tone >= CO_TONE_MIN_RATIO
+        and score_fire < CO_TONE_FIRE_MAX
+        and score_smoke < CO_TONE_SMOKE_MAX
+    ):
+        predicted = 'carbon_alarm'
+        conf      = min(0.35 + score_co_tone, 1.0)
 
     # Rule 3 - Ambiguous: something alarm-like but unclear, tiebreak on raw scores
     elif score_alarm > 0.20 or score_smoke > 0.20:
@@ -96,9 +113,34 @@ def yamnet_predict(interpreter, input_details, output_details, audio_data):
         'alarm':  round(score_alarm, 3),
         'beep':   round(score_beep,  3),
         'buzzer': round(score_buzz,  3),
+        'co_tone': round(score_co_tone, 3),
     }
 
     return predicted, conf, breakdown
+
+
+def detect_carbon_tone(audio_data):
+    """Return the spectral energy ratio for a narrow 3.5 kHz CO-alarm tone."""
+    if len(audio_data) == 0:
+        return 0.0
+
+    window = audio_data.astype(np.float32)
+    rms = float(np.sqrt(np.mean(window ** 2)))
+    if rms < MIN_RMS:
+        return 0.0
+
+    window = window - float(np.mean(window))
+    tapered = window * np.hanning(len(window))
+    spectrum = np.abs(np.fft.rfft(tapered))
+    freqs = np.fft.rfftfreq(len(tapered), 1 / 16000)
+
+    broad = (freqs >= 500) & (freqs <= 5000)
+    tone = (freqs >= CO_TONE_LOW_HZ) & (freqs <= CO_TONE_HIGH_HZ)
+    total = float(np.sum(spectrum[broad]))
+    if total <= 0.0:
+        return 0.0
+
+    return float(np.sum(spectrum[tone]) / total)
 
 
 class BaseAlarmListener:

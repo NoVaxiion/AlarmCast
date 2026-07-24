@@ -3,3 +3,5 @@ ai-edge-litert
 sounddevice
 requests
 numpy
+pandas
+matplotlib

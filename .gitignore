@@ -3,4 +3,11 @@ unused/Noises/
 .env
 .vscode/
 .DS_Store
+node_modules/
+*.zip
 backend/api/uploads/
+backend/venv/
+pi_client/.matplotlib-cache/
+pi_client/eval_output/
+pi_client/Noises_old/
+pi_client/Noises_excluded/
